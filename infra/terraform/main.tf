@@ -4,7 +4,7 @@ locals {
   environment    = terraform.workspace == "prod" ? "prod" : "dev"
   aws_account    = data.aws_caller_identity.current.account_id
   aws_user_id    = data.aws_caller_identity.current.user_id
-  ec2_key_name   = var.ec2_key_name
+  ec2_key   = var.ec2_key
   tags = {
     env      = local.environment
     location = var.aws_region
@@ -22,7 +22,7 @@ module "ec2" {
   aws_region      = var.aws_region
   pub_sg_id = [module.net.pub_sg_id]
   ami = var.ami
-  ec2_key_name = var.ec2_key_name
+  ec2_key = var.ec2_key
   epicbook_pubsub_id = module.net.epicbook_pubsub_id
   tags      = local.tags
 }

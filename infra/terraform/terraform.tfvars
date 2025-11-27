@@ -1,5 +1,5 @@
 aws_region              = "us-east-1" 
-ec2_key_name            = "~/.ssh/id_ed25519.pub"
+ec2_key            = "~/.ssh/id_ed25519.pub"
 projectname             = "epicbook"
 ami                     = "ami-0bbdd8c17ed981ef9" 
 domain                  = "hasmo.xyz"
