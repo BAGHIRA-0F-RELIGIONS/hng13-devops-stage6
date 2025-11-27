@@ -1,0 +1,7 @@
+- hosts: web
+  become: yes
+  vars:
+    repo_url: "https://github.com/donhasmo/DevOps-Stage-6.git"
+  roles:
+    - dependencies
+    - deploy

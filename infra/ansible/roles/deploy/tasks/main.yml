@@ -1,0 +1,33 @@
+---
+- name: Ensure app directory exists
+  file:
+    path: /opt/todo-app
+    state: directory
+    owner: "{{ ansible_user }}"
+    mode: '0755'
+  become: yes
+
+- name: Clone repo (or pull latest)
+  git:
+    repo: 'https://github.com/donhasmo/DevOps-Stage-6.git'
+    dest: /opt/todo-app
+    version: main
+    force: no
+    update: yes
+  become: yes
+
+- name: Copy docker-compose (template)
+  template:
+    src: docker-compose.yml.j2
+    dest: /opt/todo-app/docker-compose.yml
+    owner: "{{ ansible_user }}"
+    mode: '0644'
+  become: yes
+
+- name: Pull images & build changed services
+  community.docker.docker_compose:
+    project_src: /opt/todo-app
+    build: yes
+    pull: yes
+    restarted: yes
+  become: yes
