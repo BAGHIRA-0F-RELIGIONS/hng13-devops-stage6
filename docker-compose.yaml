@@ -2,7 +2,7 @@ version: "3.8"
 
 services:
   traefik:
-    image: traefik:latest
+    image: traefik:3.6.2
     command:
       - "--api.insecure=false"
       - "--providers.docker=true"
@@ -22,7 +22,7 @@ services:
       - "8088:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - traefik_acme:/letsencrypt
+      - ./traefik/letsencrypt:/letsencrypt
     restart: unless-stopped
     labels:
       - "traefik.http.middlewares.cors.headers.accesscontrolallowmethods=GET,POST,PUT,DELETE,OPTIONS"
@@ -31,13 +31,13 @@ services:
       - "traefik.http.middlewares.cors.headers.accesscontrolmaxage=100"
       - "traefik.http.middlewares.cors.headers.addvaryheader=true"
     networks:
-      - web
+      - backend
 
   frontend:
     build: ./frontend
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.frontend.rule=Host(`hasmo.duckdns`)"
+      - "traefik.http.routers.frontend.rule=Host(`baghira.chickenkiller.com`)"
       - "traefik.http.routers.frontend.tls=true"
       - "traefik.http.services.frontend.loadbalancer.server.port=8080"
       - "traefik.http.routers.frontend.entrypoints=websecure"
@@ -50,7 +50,6 @@ services:
     ports:
       - "8080:8080"
     networks:
-      - web
       - backend
 
   auth-api:
@@ -59,7 +58,7 @@ services:
       - "8081:8081"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.auth-api.rule=Host(`hasmo.duckdns.org`) && PathPrefix(`/api/auth`)"
+      - "traefik.http.routers.auth-api.rule=Host(`baghira.chickenkiller.com`) && PathPrefix(`/api/auth`)"
       - "traefik.http.routers.auth-api.entrypoints=websecure"
       - "traefik.http.routers.auth-api.tls=true"
       - "traefik.http.routers.auth-api.tls.certresolver=myresolver"
@@ -71,7 +70,6 @@ services:
     depends_on:
       - users-api
     networks:
-      - web
       - backend
 
   todos-api:
@@ -80,7 +78,7 @@ services:
       - "8082:8082"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.todos-api.rule=Host(`hasmo.duckdns.org`) && PathPrefix(`/api/todos`)"
+      - "traefik.http.routers.todos-api.rule=Host(`baghira.chickenkiller.com`) && PathPrefix(`/api/todos`)"
       - "traefik.http.routers.todos-api.entrypoints=websecure"
       - "traefik.http.routers.todos-api.tls=true"
       - "traefik.http.routers.todos-api.tls.certresolver=myresolver"
@@ -92,7 +90,6 @@ services:
     depends_on:
       - redis-queue
     networks:
-      - web
       - backend
 
   users-api:
@@ -101,7 +98,7 @@ services:
       - "8083:8083"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.users-api.rule=Host(`todoapp-devops.duckdns.org`) && PathPrefix(`/api/users`)"
+      - "traefik.http.routers.users-api.rule=Host(`baghira.chickenkiller.com`) && PathPrefix(`/api/users`)"
       - "traefik.http.routers.users-api.entrypoints=websecure"
       - "traefik.http.routers.users-api.tls=true"
       - "traefik.http.routers.users-api.tls.certresolver=myresolver"
@@ -111,7 +108,6 @@ services:
     env_file:
       - .env
     networks:
-      - web
       - backend
 
   log-message-processor:
@@ -119,7 +115,8 @@ services:
     env_file:
       - .env
     depends_on:
-      - redis-queue
+      redis-queue:
+        condition: service_healthy
     networks:
       - backend
 
@@ -131,11 +128,15 @@ services:
       - "6379"
     networks:
       - backend
+    healthcheck:  # Add health check
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
 volumes:
-  traefik_acme:
   redis_data:
 
 networks:
-  web:
   backend:
+    driver: bridge
