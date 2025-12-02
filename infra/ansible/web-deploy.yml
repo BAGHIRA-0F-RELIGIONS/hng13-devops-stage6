@@ -26,7 +26,7 @@
   tasks:
     - name: Clone repo from GitHub
       git:
-        repo: "https://github.com/okekolawolesunday009/DevOps-Stage-6"
+        repo: "https://github.com/BAGHIRA-0F-RELIGIONS/hng13-devops-stage6"
         dest: /tmp/mini_finance
         version: main
 
