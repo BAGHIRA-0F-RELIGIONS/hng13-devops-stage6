@@ -22,7 +22,7 @@
 
 
 - name: Clone or update repository
-  git:
+  ansible.builtin.git:
     repo: "{{ repo_url }}"
     dest: "{{ app_dir }}"
     version: main
@@ -30,8 +30,14 @@
   become_user: ubuntu
   register: git_result
 
+- name: Ensure Maven Wrapper is executable
+  ansible.builtin.file:
+    path: "{{ app_dir }}/users-api/mvnw"
+    mode: '0755'
+  become_user: ubuntu
+
 - name: Build Java application
-  shell: |
+  ansible.builtin.shell: |
     cd {{ app_dir }}/users-api
     ./mvnw clean package -DskipTests
   become_user: ubuntu
