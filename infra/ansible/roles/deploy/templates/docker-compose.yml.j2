@@ -1,116 +1,133 @@
-version: "3.8"
 
 services:
   traefik:
-    image: traefik:latest
+    image: traefik:3.6.2
     command:
       - "--api.insecure=false"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--entrypoints.web.address=:80"
       - "--entrypoints.websecure.address=:443"
-      - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
-      - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
-      - "--certificatesresolvers.myresolver.acme.httpChallenge.entryPoint=web"
-      - "--certificatesresolvers.myresolver.acme.httpChallenge=true"
-      - "--certificatesresolvers.myresolver.acme.email=${LETSENCRYPT_EMAIL}"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+      - "--certificatesresolvers.myresolver.acme.email=bahirmomodu@gmail.com"
       - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      - "--accesslog=true"
+      - "--log.level=DEBUG"
     ports:
       - "80:80"
       - "443:443"
+      - "8088:8080"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - traefik_acme:/letsencrypt
+      - ./traefik/letsencrypt:/letsencrypt
     restart: unless-stopped
+    labels:
+      - "traefik.http.middlewares.cors.headers.accesscontrolallowmethods=GET,POST,PUT,DELETE,OPTIONS"
+      - "traefik.http.middlewares.cors.headers.accesscontrolalloworiginlist=*"
+      - "traefik.http.middlewares.cors.headers.accesscontrolallowheaders=Content-Type,Authorization"
+      - "traefik.http.middlewares.cors.headers.accesscontrolmaxage=100"
+      - "traefik.http.middlewares.cors.headers.addvaryheader=true"
     networks:
-      - web
+      - backend
 
   frontend:
     build: ./frontend
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.frontend.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.frontend.rule=Host(`baghira.chickenkiller.com`)"
       - "traefik.http.routers.frontend.tls=true"
-      - "traefik.http.services.frontend.loadbalancer.server.port=80"
+      - "traefik.http.services.frontend.loadbalancer.server.port=8080"
       - "traefik.http.routers.frontend.entrypoints=websecure"
       - "traefik.http.routers.frontend.tls.certresolver=myresolver"
-    env_file:
-      - .env
+    environment:
+      - PORT=8080
+      - AUTH_API_ADDRESS=http://auth-api:8081
+      - TODOS_API_ADDRESS=http://todos-api:8082
     depends_on:
       - auth-api
       - todos-api
+    ports:
+      - "8080:8080"
     networks:
-      - web
       - backend
 
   auth-api:
     build: ./auth-api
-    expose:
-      - "8081"
+    ports:
+      - "8081:8081"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.auth.rule=Host(`${DOMAIN}`) && PathPrefix(`/api/auth/`)"
-      - "traefik.http.routers.auth.entrypoints=websecure"
-      - "traefik.http.middlewares.strip-auth.stripprefix.prefixes=/api/auth"
-      - "traefik.http.routers.auth.middlewares=strip-auth"
-      - "traefik.http.services.auth.loadbalancer.server.port=8081"
-      - "traefik.http.routers.auth.tls.certresolver=myresolver"
-    env_file:
-      - .env
+      - "traefik.http.routers.auth-api.rule=Host(`baghira.chickenkiller.com`) && PathPrefix(`/api/auth`)"
+      - "traefik.http.routers.auth-api.entrypoints=websecure"
+      - "traefik.http.routers.auth-api.tls=true"
+      - "traefik.http.routers.auth-api.tls.certresolver=myresolver"
+      - "traefik.http.services.auth-api.loadbalancer.server.port=8081"
+      - "traefik.http.middlewares.auth-api-strip.stripprefix.prefixes=/api/auth"
+      - "traefik.http.routers.auth-api.middlewares=auth-api-strip"
+    environment:
+      - AUTH_API_PORT=8081
+      - JWT_SECRET=myfancysecret
+      - USERS_API_ADDRESS=http://users-api:8083
     depends_on:
       - users-api
     networks:
-      - web
       - backend
 
   todos-api:
     build: ./todos-api
-    expose:
-      - "8082"
+    ports:
+      - "8082:8082"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.todos.rule=Host(`${DOMAIN}`) && PathPrefix(`/api/todos/`)"
-      - "traefik.http.routers.todos.entrypoints=websecure"
-      - "traefik.http.middlewares.strip-todos.stripprefix.prefixes=/api/todos"
-      - "traefik.http.routers.todos.middlewares=strip-todos"
-      - "traefik.http.services.todos.loadbalancer.server.port=8082"
-      - "traefik.http.routers.todos.tls.certresolver=myresolver"
-    env_file:
-      - .env
+      - "traefik.http.routers.todos-api.rule=Host(`baghira.chickenkiller.com`) && PathPrefix(`/api/todos`)"
+      - "traefik.http.routers.todos-api.entrypoints=websecure"
+      - "traefik.http.routers.todos-api.tls=true"
+      - "traefik.http.routers.todos-api.tls.certresolver=myresolver"
+      - "traefik.http.services.todos-api.loadbalancer.server.port=8082"
+      - "traefik.http.middlewares.todos-api-strip.stripprefix.prefixes=/api/todos"
+      - "traefik.http.routers.todos-api.middlewares=todos-api-strip"
+    environment:
+      - JWT_SECRET=myfancysecret
+      - REDIS_HOST=redis-queue
+      - REDIS_PORT=6379
+      - REDIS_CHANNEL=log_channel
     depends_on:
       - redis-queue
     networks:
-      - web
       - backend
 
   users-api:
     build: ./users-api
-    expose:
-      - "8083"
+    ports:
+      - "8083:8083"
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.users.rule=Host(`${DOMAIN}`) && PathPrefix(`/api/users/`)"
-      - "traefik.http.routers.users.entrypoints=websecure"
-      - "traefik.http.middlewares.strip-users.stripprefix.prefixes=/api/users"
-      - "traefik.http.routers.users.middlewares=strip-users"
-      - "traefik.http.services.users.loadbalancer.server.port=8083"
-      - "traefik.http.routers.users.tls.certresolver=myresolver"
-    env_file:
-      - .env
+      - "traefik.http.routers.users-api.rule=Host(`baghira.chickenkiller.com`) && PathPrefix(`/api/users`)"
+      - "traefik.http.routers.users-api.entrypoints=websecure"
+      - "traefik.http.routers.users-api.tls=true"
+      - "traefik.http.routers.users-api.tls.certresolver=myresolver"
+      - "traefik.http.services.users-api.loadbalancer.server.port=8083"
+      - "traefik.http.middlewares.users-api-strip.stripprefix.prefixes=/api/users"
+      - "traefik.http.routers.users-api.middlewares=users-api-strip"
+    environment:
+      - SERVER_PORT=8083
+      - JWT_SECRET=myfancysecret
     networks:
-      - web
       - backend
 
   log-message-processor:
     build: ./log-message-processor
-    env_file:
-      - .env
+    environment:
+      - REDIS_HOST=redis-queue
+      - REDIS_PORT=6379
+      - REDIS_CHANNEL=log_channel
     depends_on:
-      - redis-queue
+      redis-queue:
+        condition: service_healthy
     networks:
       - backend
-    expose:
-      - "9000"
 
   redis-queue:
     image: redis:7-alpine
@@ -120,11 +137,15 @@ services:
       - "6379"
     networks:
       - backend
+    healthcheck:  # Add health check
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
 volumes:
-  traefik_acme:
   redis_data:
 
 networks:
-  web:
   backend:
+    driver: bridge

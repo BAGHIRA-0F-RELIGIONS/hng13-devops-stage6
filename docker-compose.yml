@@ -1,25 +1,4 @@
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 services:
   traefik:
     image: traefik:3.6.2
@@ -31,7 +10,7 @@ services:
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
       - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
-      - "--certificatesresolvers.myresolver.acme.email=alhassani.y1k@gmail.com"
+      - "--certificatesresolvers.myresolver.acme.email=bahirmomodu@gmail.com"
       - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
       - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
       - "--accesslog=true"
@@ -62,8 +41,10 @@ services:
       - "traefik.http.services.frontend.loadbalancer.server.port=8080"
       - "traefik.http.routers.frontend.entrypoints=websecure"
       - "traefik.http.routers.frontend.tls.certresolver=myresolver"
-    env_file:
-      - .env
+    environment:
+      - PORT=8080
+      - AUTH_API_ADDRESS=http://auth-api:8081
+      - TODOS_API_ADDRESS=http://todos-api:8082
     depends_on:
       - auth-api
       - todos-api
@@ -85,8 +66,10 @@ services:
       - "traefik.http.services.auth-api.loadbalancer.server.port=8081"
       - "traefik.http.middlewares.auth-api-strip.stripprefix.prefixes=/api/auth"
       - "traefik.http.routers.auth-api.middlewares=auth-api-strip"
-    env_file:
-      - .env
+    environment:
+      - AUTH_API_PORT=8081
+      - JWT_SECRET=myfancysecret
+      - USERS_API_ADDRESS=http://users-api:8083
     depends_on:
       - users-api
     networks:
@@ -105,8 +88,11 @@ services:
       - "traefik.http.services.todos-api.loadbalancer.server.port=8082"
       - "traefik.http.middlewares.todos-api-strip.stripprefix.prefixes=/api/todos"
       - "traefik.http.routers.todos-api.middlewares=todos-api-strip"
-    env_file:
-      - .env
+    environment:
+      - JWT_SECRET=myfancysecret
+      - REDIS_HOST=redis-queue
+      - REDIS_PORT=6379
+      - REDIS_CHANNEL=log_channel
     depends_on:
       - redis-queue
     networks:
@@ -125,15 +111,18 @@ services:
       - "traefik.http.services.users-api.loadbalancer.server.port=8083"
       - "traefik.http.middlewares.users-api-strip.stripprefix.prefixes=/api/users"
       - "traefik.http.routers.users-api.middlewares=users-api-strip"
-    env_file:
-      - .env
+    environment:
+      - SERVER_PORT=8083
+      - JWT_SECRET=myfancysecret
     networks:
       - backend
 
   log-message-processor:
     build: ./log-message-processor
-    env_file:
-      - .env
+    environment:
+      - REDIS_HOST=redis-queue
+      - REDIS_PORT=6379
+      - REDIS_CHANNEL=log_channel
     depends_on:
       redis-queue:
         condition: service_healthy
