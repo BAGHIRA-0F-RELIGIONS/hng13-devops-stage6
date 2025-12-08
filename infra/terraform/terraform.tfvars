@@ -1,5 +1,7 @@
 aws_region              = "us-east-1" 
-projectname             = "epicbook"
+ec2_key_path            = "~/.ssh/id_rsa.pub"
+projectname             = "stage-6"
 ami                     = "ami-0bbdd8c17ed981ef9" 
-domain                  = "www.prod.chicken.killer.com"
-
+domain                  = "baghira.chickenkiller.com"
+ssh_private_key_path    = "~/.ssh/id_rsa"
+key_name                = "n-virg"

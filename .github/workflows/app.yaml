@@ -1,0 +1,139 @@
+name: Ansible Deploy (triggered by infra)
+
+on:
+  workflow_run:
+    workflows: ["Infrastructure Deployment"]
+    types: [completed]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_VERSION: '1.6.0'
+  PYTHON_VERSION: '3.11'
+
+jobs:
+  deploy:
+    # only run when infra workflow succeeded
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+
+    # bring secrets into env so they can be referenced in steps
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      SMTP_SERVER: ${{ secrets.SMTP_SERVER }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT }}
+      SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      SMTP_FROM_EMAIL: ${{ secrets.SMTP_FROM_EMAIL }}
+      NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (for remote backend)
+        if: ${{ env.AWS_ACCESS_KEY_ID != '' && env.AWS_SECRET_ACCESS_KEY != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Terraform init (use same backend as infra)
+        working-directory: ./infra/terraform
+        run: |
+          terraform init -input=false
+
+      - name: Export Ansible files from terraform outputs (write into infra/ansible)
+        working-directory: ./infra/terraform
+        run: |
+          # ensure infra/ansible exists and group_vars folder exists
+          mkdir -p ../ansible/group_vars
+
+          # extract outputs (must match exact output names in Terraform)
+          terraform output -raw ansible_inventory  > ../ansible/inventory.ini
+          terraform output -raw ansible_group_vars > ../ansible/group_vars/all.json
+
+          echo "Wrote inventory and group_vars to infra/ansible:"
+          ls -la ../ansible || true
+          ls -la ../ansible/group_vars || true
+
+      - name: Setup Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Ansible & dependencies (including pyyaml)
+        run: |
+          python -m pip install --upgrade pip
+          pip install ansible pyyaml
+
+      - name: Setup SSH key and run Ansible
+        run: |
+          set -euo pipefail
+
+          # Write private key 
+          mkdir -p ~/.ssh
+          printf '%s' "${{ env.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+
+          # Disable host key checking
+          export ANSIBLE_HOST_KEY_CHECKING=False
+
+          # Debug: ensure key exists and permissions are correct 
+          ls -l ~/.ssh/id_rsa
+          head -n 3 ~/.ssh/id_rsa
+
+          # Find playbook dynamically 
+          candidates=(
+            "infra/ansible/site.yml"
+            "infra/ansible/site.yaml"
+            "infra/ansible/playbook.yml"
+            "infra/ansible/playbook.yaml"
+            "infra/ansible/deploy.yml"
+            "infra/ansible/deploy.yaml"
+            "site.yml"
+            "site.yaml"
+            "playbook.yml"
+            "playbook.yaml"
+          )
+          PLAYBOOK=""
+          for p in "${candidates[@]}"; do
+            if [ -f "$p" ]; then
+              PLAYBOOK="$p"
+              break
+            fi
+          done
+          if [ -z "$PLAYBOOK" ]; then
+            echo "ERROR: No playbook found. Searched:"
+            for p in "${candidates[@]}"; do echo " - $p"; done
+            exit 1
+          fi
+          echo "Found playbook: $PLAYBOOK"
+
+          # -Run Ansible ---
+          ansible-playbook -i infra/ansible/inventory.ini "$PLAYBOOK" --private-key ~/.ssh/id_rsa -vv
+
+      - name: Send deployment completion email (optional)
+        if: ${{ env.SMTP_SERVER != '' && env.SMTP_USERNAME != '' }}
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ env.SMTP_SERVER }}
+          server_port: ${{ env.SMTP_PORT }}
+          username: ${{ env.SMTP_USERNAME }}
+          password: ${{ env.SMTP_PASSWORD }}
+          subject: "Ansible deployment completed"
+          to: ${{ env.NOTIFICATION_EMAIL }}
+          from: ${{ env.SMTP_FROM_EMAIL }}
+          body: |
+            Ansible deployment completed for infra workflow run: ${{ github.event.workflow_run.id }}

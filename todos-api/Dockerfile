@@ -1,13 +1,18 @@
-FROM node:18-alpine
+FROM node:8 as deps
 
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install 
 
+RUN npm install
+
+FROM node:8-slim as prod
+
+WORKDIR /app
+
+COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 EXPOSE 8082
 
-# Use the app’s declared start script
 CMD ["npm", "start"]

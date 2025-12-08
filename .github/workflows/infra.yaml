@@ -1,0 +1,263 @@
+name: Infrastructure Deployment
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'infra/terraform/**'
+      - 'infra/ansible/**'
+      - '.github/workflows/infra.yaml'
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'infra/terraform/**'
+      - 'infra/ansible/**'
+  workflow_dispatch:
+
+env:
+  TF_VERSION: '1.6.0'
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+
+jobs:
+  terraform-plan:
+    name: Terraform Plan & Drift Detection
+    runs-on: ubuntu-latest
+    env:
+      TF_VAR_ec2_key_path: ${{ secrets.SSH_PUBLIC_KEY }}
+    outputs:
+      has_drift: ${{ steps.drift_check.outputs.has_drift }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Write SSH keys to runner for Terraform
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          printf '%s' "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/id_rsa.pub
+          chmod 644 ~/.ssh/id_rsa.pub
+
+      - name: Validate SSH public key
+        run: |
+          TMPFILE=$(mktemp)
+          printf '%s' "${{ secrets.SSH_PUBLIC_KEY }}" > "$TMPFILE"
+          if ! head -n1 "$TMPFILE" | grep -E -q '^(ssh-(rsa|ed25519|dss)|ecdsa-sha2-)'; then
+            echo "Invalid SSH public key format"; exit 1
+          fi
+          if ! ssh-keygen -lf "$TMPFILE" >/dev/null 2>&1; then
+            echo "Failed to parse SSH public key"; exit 1
+          fi
+          rm -f "$TMPFILE"
+          echo "SSH public key validated"
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform Init & Validate
+        working-directory: ./infra/terraform
+        run: |
+          terraform init -input=false
+          terraform validate
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ./infra/terraform
+        run: |
+          terraform plan -no-color -out=tfplan
+          terraform show -no-color tfplan > plan_output.txt
+          cat plan_output.txt
+
+      - name: Check for Drift
+        id: drift_check
+        working-directory: ./infra/terraform
+        run: |
+          if grep -q "No changes" plan_output.txt; then
+            echo "has_drift=false" >> $GITHUB_OUTPUT
+          else
+            echo "has_drift=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Upload Plan Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: ./infra/terraform/tfplan
+
+      - name: Upload Plan Output
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-output
+          path: ./infra/terraform/plan_output.txt
+
+  send-drift-notification:
+    name: Send Drift Notification
+    runs-on: ubuntu-latest
+    needs: terraform-plan
+    if: needs.terraform-plan.outputs.has_drift == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: plan-output
+
+      - name: Send Email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "⚠️ Terraform Drift Detected"
+          to: ${{ secrets.NOTIFICATION_EMAIL }}
+          from: ${{ secrets.SMTP_FROM_EMAIL }}
+          body: |
+            Terraform plan detected drift. Please review plan_output.txt.
+          attachments: plan_output.txt
+
+  wait-for-approval:
+    name: Wait for Manual Approval
+    runs-on: ubuntu-latest
+    env:
+      TF_VAR_ec2_key_path: ${{ secrets.SSH_PUBLIC_KEY }}
+    needs: [terraform-plan, send-drift-notification]
+    if: needs.terraform-plan.outputs.has_drift == 'true'
+    environment:
+      name: production
+    steps:
+      - run: echo "Waiting for manual approval in GitHub Actions UI"
+
+  terraform-apply:
+    name: Terraform Apply
+    runs-on: ubuntu-latest
+    needs: [terraform-plan, wait-for-approval]
+    env:
+      TF_VAR_ec2_key_path: ${{ secrets.SSH_PUBLIC_KEY }}
+      TF_VAR_ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
+    if: |
+      always() &&
+      needs.terraform-plan.result == 'success' &&
+      (needs.terraform-plan.outputs.has_drift == 'false' || needs.wait-for-approval.result == 'success')
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Write SSH keys to runner for Terraform
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          printf '%s' "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/id_rsa.pub
+          chmod 644 ~/.ssh/id_rsa.pub
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Terraform Init
+        working-directory: ./infra/terraform
+        run: terraform init -input=false
+
+      - name: Download Terraform Plan
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-plan
+          path: ./infra/terraform
+
+      - name: Terraform Apply (use plan if available)
+        working-directory: ./infra/terraform
+        run: |
+          if [ "${{ needs.terraform-plan.outputs.has_drift }}" == "true" ]; then
+            terraform apply -input=false -auto-approve tfplan
+          else
+            terraform apply -input=false -auto-approve
+          fi
+
+      - name: Capture Terraform outputs
+        id: terraform_output
+        working-directory: ./infra/terraform
+        run: |
+          terraform output -json > outputs.json
+          if terraform output -raw instance_public_ip >/dev/null 2>&1; then
+            echo "instance_ip=$(terraform output -raw instance_public_ip)" >> $GITHUB_OUTPUT
+          fi
+
+  auto-destroy-on-failure:
+    name: Auto-destroy on failure/cancel
+    runs-on: ubuntu-latest
+    env:
+      TF_VAR_ec2_key_path: ${{ secrets.SSH_PUBLIC_KEY }}
+    needs: terraform-apply
+    if: ${{ failure() || cancelled() }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Write SSH keys to runner for Terraform
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          printf '%s' "${{ secrets.SSH_PUBLIC_KEY }}" > ~/.ssh/id_rsa.pub
+          chmod 644 ~/.ssh/id_rsa.pub
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      - name: Auto Destroy Terraform
+        working-directory: ./infra/terraform
+        run: |
+          terraform init -input=false
+          terraform destroy -auto-approve
+
+  send-completion-notification:
+    name: Send Completion Email
+    runs-on: ubuntu-latest
+    needs: terraform-apply
+    if: always() && needs.terraform-apply.result == 'success'
+    steps:
+      - name: Send Success Email
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_SERVER }}
+          server_port: ${{ secrets.SMTP_PORT }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "Terraform Deployment Completed"
+          to: ${{ secrets.NOTIFICATION_EMAIL }}
+          from: ${{ secrets.SMTP_FROM_EMAIL }}
+          body: |
+            Terraform deployment succeeded.
+            Repository: ${{ github.repository }}
+            Branch: ${{ github.ref_name }}
+            Commit: ${{ github.sha }}
+            Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

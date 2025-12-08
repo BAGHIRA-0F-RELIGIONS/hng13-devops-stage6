@@ -3,7 +3,7 @@ variable "aws_region" {
 }
 
 
-variable "ec2_key" {
+variable "ec2_key_path" {
   type = string
 }
 
@@ -16,7 +16,7 @@ variable "ami" {
     type = string
 }
 
-variable "ssh_private_key" {
+variable "ssh_private_key_path" {
   description = "private key for ansible connection"
   type = string
 }
@@ -24,4 +24,8 @@ variable "ssh_private_key" {
 variable "domain" {
   type = string
   description = "domain for ansible host"
+}
+
+variable "key_name" {
+  type = string
 }

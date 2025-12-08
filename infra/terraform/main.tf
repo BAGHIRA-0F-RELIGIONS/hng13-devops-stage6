@@ -4,7 +4,7 @@ locals {
   environment    = terraform.workspace == "prod" ? "prod" : "dev"
   aws_account    = data.aws_caller_identity.current.account_id
   aws_user_id    = data.aws_caller_identity.current.user_id
-  ec2_key   = var.ec2_key
+  ec2_key   = var.ec2_key_path
   tags = {
     env      = local.environment
     location = var.aws_region
@@ -22,7 +22,8 @@ module "ec2" {
   aws_region      = var.aws_region
   pub_sg_id = [module.net.pub_sg_id]
   ami = var.ami
-  ec2_key = var.ec2_key
+  key_name = var.key_name
+  projectname = var.projectname
   epicbook_pubsub_id = module.net.epicbook_pubsub_id
   tags      = local.tags
 }
@@ -37,56 +38,80 @@ module "net" {
 
 
 
-# Write an Ansible inventory file using local_file and templatefile
-resource "local_file" "ansible_inventory" {
-  filename = "${path.module}/../ansible/inventory.ini"
-  content  = templatefile("${path.module}/templates/ansible_inventory.tmpl", {
+output "ansible_inventory" {
+  description = "Ansible inventory (hosts) for the application"
+  value = templatefile("${path.module}/templates/ansible_inventory.tmpl", {
     host_ip = module.ec2.public_ip
     user    = "ubuntu"
     ssh_key = var.ssh_private_key_path
   })
+  sensitive = false
 }
 
-# Write group_vars (json) that Ansible can use
-resource "local_file" "ansible_group_vars" {
-  filename = "${path.module}/../ansible/group_vars/web.json"
-  content  = jsonencode({
+output "ansible_group_vars" {
+  description = "JSON-encoded group_vars for Ansible"
+  value = jsonencode({
     public_ip = module.ec2.public_ip
-    # instance_id = module.ec2.instance_id
-    domain = var.domain
+    domain    = var.domain
+    app_dir   = "/opt/todo-app"
+    repo_url  = "https://github.com/donhasmo/DevOps-Stage-6.git"
   })
+  sensitive = false
 }
 
-# Null resource to run Ansible. It will run only when the instance changes or inventory file changes.
-resource "null_resource" "run_ansible" {
-  triggers = {
-    # instance_id     = module.ec2.instance_id
-    instance_pub_ip = module.ec2.public_ip
-    inventory_path  = local_file.ansible_inventory.filename
-    # add other triggers if needed (e.g., git commit hash)
-  }
 
-  provisioner "local-exec" {
-  command = <<EOT
-    echo '[INFO] Waiting for SSH connection to be ready...'
-    until ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@${module.ec2.public_ip} 'echo ready'; do
-      echo '[INFO] SSH not ready yet, waiting 10s...'
-      sleep 10
-    done
-    echo '[INFO] SSH ready! Running Ansible playbook...'
-    cd ${path.module}/../ansible
-    ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i inventory.ini site.yml
-  EOT
+# # Write an Ansible inventory file using local_file and templatefile
+# resource "local_file" "ansible_inventory" {
+#   filename = "${path.module}/../ansible/inventory.ini"
+#   content  = templatefile("${path.module}/templates/ansible_inventory.tmpl", {
+#     host_ip = module.ec2.public_ip
+#     user    = "ubuntu"
+#     ssh_key = var.ssh_private_key_path
+#   })
+# }
 
-  interpreter = ["bash", "-c"]
-}
+# # Write group_vars (json) that Ansible can use
+# resource "local_file" "ansible_group_vars" {
+#   filename = "${path.module}/../ansible/group_vars/all.json"
+#   content  = jsonencode({
+#     public_ip = module.ec2.public_ip
+#     # instance_id = module.ec2.instance_id
+#     domain = var.domain
+#     app_dir = "/opt/todo-app"
+#     repo_url = "https://github.com/donhasmo/DevOps-Stage-6.git"
+#   })
+# }
 
-depends_on = [
-  local_file.ansible_inventory,
-  local_file.ansible_group_vars,
-  module.ec2
-]
-}
+# # Null resource to run Ansible. It will run only when the instance changes or inventory file changes.
+# resource "null_resource" "run_ansible" {
+#   triggers = {
+#     # instance_id     = module.ec2.instance_id
+#     instance_pub_ip = module.ec2.public_ip
+#     inventory_path  = local_file.ansible_inventory.filename
+#     # add other triggers if needed (e.g., git commit hash)
+#   }
+
+#   provisioner "local-exec" {
+#   command = <<EOT
+#     echo '[INFO] Waiting for SSH connection to be ready...'
+#     until ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ubuntu@${module.ec2.public_ip} 'echo ready'; do
+#       echo '[INFO] SSH not ready yet, waiting 10s...'
+#       sleep 10
+#     done
+#     echo '[INFO] SSH ready! Running Ansible playbook...'
+#     cd ${path.module}/../ansible
+#     ANSIBLE_HOST_KEY_CHECKING=False ansible-playbook -i inventory.ini site.yml
+#   EOT
+
+#   interpreter = ["bash", "-c"]
+# }
+
+# depends_on = [
+#   local_file.ansible_inventory,
+#   local_file.ansible_group_vars,
+#   module.ec2
+# ]
+# }
 
 
 
